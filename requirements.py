@@ -27,6 +27,8 @@ cruise_speed_step = 100
 cruise_speed_min = -2000
 cruise_speed_max = 2000
 turn_slowdown = 300  # D-pad LEFT/RIGHT: temporarily slow one side to steer
+joystick_deadzone = 5
+joystick_speed_scale = 20  # joystick -100..100 -> motor speed (-2000..2000)
 previous_lb_pressed = False
 previous_b_pressed = False
 previous_rb_pressed = False
@@ -131,7 +133,6 @@ while controller is None:
 while True:
     # Read inputs once per loop (more reliable than polling pressed() repeatedly)
     left_horizontal, left_vertical = controller.joystick_left()
-    right_horizontal, right_vertical = controller.joystick_right()
     pressed = controller.buttons.pressed()
 
     # LT/RT trigger debug: override light while held, restore base when released.
@@ -198,12 +199,30 @@ while True:
 
         # No rumble in cruise mode
     else:
-        motor1_speed = left_vertical * 20
-        motor2_speed = right_vertical * 20
+        # Manual mode: single-stick arcade drive using LEFT joystick.
+        # left_vertical = throttle (forward/back), left_horizontal = steering (left/right).
+        throttle = left_vertical
+        steer = left_horizontal
 
-        # Rumble if joysticks pushed in opposite directions (skid-steer warning)
-        if (left_vertical > 20 and right_vertical < -20) or (left_vertical < -20 and right_vertical > 20):
-            controller.rumble(power=50, duration=100)
+        if -joystick_deadzone < throttle < joystick_deadzone:
+            throttle = 0
+        if -joystick_deadzone < steer < joystick_deadzone:
+            steer = 0
+
+        # Differential mixing:
+        # - Push forward: both forward
+        # - Push backward: both backward
+        # - Push diagonally: one side slows down depending on steering
+        mix_left = throttle + steer
+        mix_right = throttle - steer
+
+        # Normalize so we never exceed the joystick range (-100..100).
+        m = max(abs(mix_left), abs(mix_right), 100)
+        mix_left = (mix_left * 100) / m
+        mix_right = (mix_right * 100) / m
+
+        motor1_speed = mix_left * joystick_speed_scale
+        motor2_speed = mix_right * joystick_speed_scale
 
     # D-pad LEFT/RIGHT: temporarily slow one side (release returns to previous speeds)
     if Button.RIGHT in pressed:
